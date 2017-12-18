@@ -359,7 +359,7 @@ class Policy(object):
             except KeyError:
                 continue
 
-            if restr is None:
+            if restr is None or restr == 'None':
                 continue
 
             _are = {}
@@ -510,7 +510,7 @@ class Policy(object):
                 self.get_fail_on_missing_requested(sp_entity_id))
 
         _rest = self.get_attribute_restrictions(sp_entity_id)
-        if _rest:
+        if (_rest) and (_rest != 'None'):
             if _ava is None:
                 _ava = ava.copy()
             _ava = filter_attribute_value_assertions(_ava, _rest)
