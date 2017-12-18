@@ -1,17 +1,17 @@
 from __future__ import print_function
 import hashlib
-import importlib
-import json
 import logging
 import os
 import sys
+import json
+import requests
+import six
 
 from hashlib import sha1
 from os.path import isfile
 from os.path import join
 
-import requests
-import six
+from future.backports.test.support import import_module
 
 from saml2 import md
 from saml2 import saml
@@ -660,7 +660,11 @@ class MetaDataFile(InMemoryMetaData):
     def __init__(self, attrc, filename=None, cert=None, **kwargs):
         super(MetaDataFile, self).__init__(attrc, **kwargs)
         if not filename:
-            raise SAMLError('No file specified.')
+            if kwargs['redis'] is True:
+                self.cert = cert
+                return
+            else:
+                raise SAMLError('No file specified.')
         self.filename = filename
         self.cert = cert
 
@@ -671,6 +675,8 @@ class MetaDataFile(InMemoryMetaData):
         _txt = self.get_metadata_content()
         return self.parse_and_check_signature(_txt)
 
+    def load_redis(self, contents):
+        return self.parse_and_check_signature(contents)
 
 class MetaDataLoader(MetaDataFile):
     """
@@ -694,7 +700,7 @@ class MetaDataLoader(MetaDataFile):
         i = func.rfind('.')
         module, attr = func[:i], func[i + 1:]
         try:
-            mod = importlib.import_module(module)
+            mod = import_module(module)
         except Exception as e:
             raise RuntimeError(
                 'Cannot find metadata provider function %s: "%s"' % (func, e))
@@ -854,14 +860,30 @@ class MetadataStore(MetaData):
         self.filter = filter
         self.to_old = {}
 
-    def load(self, *args, **kwargs):
+    def load(self, domain, *args, **kwargs):
+        xml_data = None
         if self.filter:
             _args = {"filter": self.filter}
         else:
             _args = {}
 
         typ = args[0]
-        if typ == "local":
+        if typ == "redis":
+            key = args[1]
+            from redis_connect import RedisConnect
+            if key == "idp.xml":
+                if domain == "$ip":
+                    domain = "basics"
+                xml_data = RedisConnect().hget_metadata(domain, args[1])
+            else:
+                xml_data= RedisConnect().hget_metadata(domain+"_metadata",args[1])
+            # json_str = metadata_byte.decode('utf8').replace("'", '"')
+            # jsonData = json.loads(json_str)
+            # import dicttoxml
+            # xml_data = dicttoxml.dicttoxml(jsonData)
+            #xml_data = xml.decode('utf8').replace("'", '"')
+            print(str(xml_data))
+        elif typ == "local":
             key = args[1]
             # if library read every file in the library
             if os.path.isdir(key):
@@ -874,6 +896,8 @@ class MetadataStore(MetaData):
                 return
             else:
                 # else it's just a plain old file so read it
+                # from redis_connect import RedisConnect
+                # RedisConnect().hget_metadata()
                 _md = MetaDataFile(self.attrc, key, **_args)
         elif typ == "inline":
             self.ii += 1
@@ -907,10 +931,18 @@ class MetadataStore(MetaData):
             _md = MetaDataMDX(args[1])
         else:
             raise SAMLError("Unknown metadata type '%s'" % typ)
-        _md.load()
+
+        if typ == "redis":
+            if xml_data is not None:
+                _args['redis'] = True
+                _md = MetaDataFile(self.attrc, None, **_args)
+                _md.load_redis(xml_data)
+        else:
+            _md.load()
+
         self.metadata[key] = _md
 
-    def imp(self, spec):
+    def imp(self, domain, spec):
         # This serves as a backwards compatibility
         if type(spec) is dict:
             # Old style...
@@ -921,7 +953,7 @@ class MetadataStore(MetaData):
                             val["check_validity"] = False
                         self.load(key, **val)
                     else:
-                        self.load(key, val)
+                        self.load(domain, key, val)
         else:
             for item in spec:
                 try:
@@ -930,7 +962,7 @@ class MetadataStore(MetaData):
                     raise SAMLError("Misconfiguration in metadata %s" % item)
                 mod, clas = key.rsplit('.', 1)
                 try:
-                    mod = importlib.import_module(mod)
+                    mod = import_module(mod)
                     MDloader = getattr(mod, clas)
                 except (ImportError, AttributeError):
                     raise SAMLError("Unknown metadata loader %s" % key)
