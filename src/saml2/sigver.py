@@ -19,13 +19,25 @@ from binascii import hexlify
 
 from future.backports.urllib.parse import urlencode
 
-from cryptography.exceptions import InvalidSignature
-from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import rsa
-from cryptography.hazmat.primitives.asymmetric.padding import PKCS1v15
-from cryptography.hazmat.primitives.serialization import load_pem_private_key
-from cryptography.x509 import load_pem_x509_certificate
+# from Crypto.PublicKey.RSA import importKey
+# from Crypto.Signature import PKCS1_v1_5
+# from Crypto.Util.asn1 import DerSequence
+# from Crypto.PublicKey import RSA
+# from Crypto.Hash import SHA
+# from Crypto.Hash import SHA224
+# from Crypto.Hash import SHA256
+# from Crypto.Hash import SHA384
+# from Crypto.Hash import SHA512
+
+from Cryptodome.PublicKey.RSA import importKey
+from Cryptodome.Signature import PKCS1_v1_5
+from Cryptodome.Util.asn1 import DerSequence
+from Cryptodome.PublicKey import RSA
+from Cryptodome.Hash import SHA
+from Cryptodome.Hash import SHA224
+from Cryptodome.Hash import SHA256
+from Cryptodome.Hash import SHA384
+from Cryptodome.Hash import SHA512
 
 from tempfile import NamedTemporaryFile
 from subprocess import Popen
@@ -74,8 +86,6 @@ TRIPLE_DES_CBC = "http://www.w3.org/2001/04/xmlenc#tripledes-cbc"
 XMLTAG = "<?xml version='1.0'?>"
 PREFIX1 = "<?xml version='1.0' encoding='UTF-8'?>"
 PREFIX2 = '<?xml version="1.0" encoding="UTF-8"?>'
-
-backend = default_backend()
 
 
 class SigverError(SAMLError):
@@ -396,10 +406,18 @@ def active_cert(key):
     """
     try:
         cert_str = pem_format(key)
-        cert = crypto.load_certificate(crypto.FILETYPE_PEM, cert_str)
-        assert cert.has_expired() == 0
-        assert not OpenSSLWrapper().certificate_not_valid_yet(cert)
-        return True
+        try:
+            certificate = importKey(cert_str)
+            not_before = to_time(str(certificate.get_not_before()))
+            not_after = to_time(str(certificate.get_not_after()))
+            assert not_before < utc_now()
+            assert not_after > utc_now()
+            return True
+        except:
+            cert = crypto.load_certificate(crypto.FILETYPE_PEM, cert_str)
+            assert cert.has_expired() == 0
+            assert not OpenSSLWrapper().certificate_not_valid_yet(cert)
+            return True
     except AssertionError:
         return False
     except AttributeError:
@@ -537,8 +555,19 @@ def rsa_eq(key1, key2):
 
 
 def extract_rsa_key_from_x509_cert(pem):
-    cert = load_pem_x509_certificate(pem, backend)
-    return cert.public_key()
+    # Convert from PEM to DER
+    der = ssl.PEM_cert_to_DER_cert(pem.decode('ascii'))
+
+    # Extract subjectPublicKeyInfo field from X.509 certificate (see RFC3280)
+    cert = DerSequence()
+    cert.decode(der)
+    tbsCertificate = DerSequence()
+    tbsCertificate.decode(cert[0])
+    subjectPublicKeyInfo = tbsCertificate[6]
+
+    # Initialize RSA key
+    rsa_key = RSA.importKey(subjectPublicKeyInfo)
+    return rsa_key
 
 
 def pem_format(key):
@@ -547,8 +576,10 @@ def pem_format(key):
 
 
 def import_rsa_key_from_file(filename):
-    return load_pem_private_key(read_file(filename, 'rb'), None, backend)
-
+    from redis_connect import RedisConnect
+    file = RedisConnect().get_text_from_specific_domain_in_redis("basics", filename)
+    #return RSA.importKey(read_file(filename, 'r'))
+    return RSA.importKey(file)
 
 def parse_xmlsec_output(output):
     """ Parse the output from xmlsec to try to find out if the
@@ -593,28 +624,25 @@ class RSASigner(Signer):
         if key is None:
             key = self.key
 
-        return key.sign(msg, PKCS1v15(), self.digest)
+        h = self.digest.new(msg)
+        signer = PKCS1_v1_5.new(key)
+        return signer.sign(h)
 
     def verify(self, msg, sig, key=None):
         if key is None:
             key = self.key
 
-        try:
-            if isinstance(key, rsa.RSAPrivateKey):
-                key = key.public_key()
-
-            key.verify(sig, msg, PKCS1v15(), self.digest)
-            return True
-        except InvalidSignature:
-            return False
+        h = self.digest.new(msg)
+        verifier = PKCS1_v1_5.new(key)
+        return verifier.verify(h, sig)
 
 
 SIGNER_ALGS = {
-    SIG_RSA_SHA1: RSASigner(hashes.SHA1()),
-    SIG_RSA_SHA224: RSASigner(hashes.SHA224()),
-    SIG_RSA_SHA256: RSASigner(hashes.SHA256()),
-    SIG_RSA_SHA384: RSASigner(hashes.SHA384()),
-    SIG_RSA_SHA512: RSASigner(hashes.SHA512()),
+    SIG_RSA_SHA1: RSASigner(SHA),
+    SIG_RSA_SHA224: RSASigner(SHA224),
+    SIG_RSA_SHA256: RSASigner(SHA256),
+    SIG_RSA_SHA384: RSASigner(SHA384),
+    SIG_RSA_SHA512: RSASigner(SHA512),
 }
 
 REQ_ORDER = ["SAMLRequest", "RelayState", "SigAlg"]
@@ -705,7 +733,10 @@ def read_cert_from_file(cert_file, cert_type):
         return ""
 
     if cert_type == "pem":
-        _a = read_file(cert_file, 'rb').decode("utf8")
+        from redis_connect import RedisConnect
+        _a = RedisConnect().get_text_from_specific_domain_in_redis("basics",cert_file)
+        #_a = read_file(cert_file, 'rb').decode("utf8")
+        #_a = filename.decode("utf8")
         _b = _a.replace("\r\n", "\n")
         lines = _b.split("\n")
 
@@ -909,6 +940,7 @@ class CryptoBackendXmlSec1(CryptoBackend):
             if stdout == "":
                 if signed_statement:
                     return signed_statement.decode('utf-8')
+                    #return signed_statement
             logger.error(
                 "Signing operation failed :\nstdout : %s\nstderr : %s",
                 stdout, stderr)
@@ -978,6 +1010,16 @@ class CryptoBackendXmlSec1(CryptoBackend):
 
         logger.debug("xmlsec command: %s", " ".join(com_list))
 
+        from redis_connect import RedisConnect
+        ntf_str = RedisConnect().get_text_from_specific_domain_in_redis("basics", com_list[3])
+        try:
+            text_file = open("frontend.key", "w")
+            text_file.write(ntf_str)
+            text_file.close()
+        except Exception as e:
+            print(e)
+            pass
+
         pof = Popen(com_list, stderr=PIPE, stdout=PIPE)
 
         p_out = pof.stdout.read().decode('utf-8')
@@ -997,7 +1039,6 @@ class CryptoBackendXmlSec1(CryptoBackend):
 
         ntf.seek(0)
         return p_out, p_err, ntf.read()
-
 
 class CryptoBackendXMLSecurity(CryptoBackend):
     """
@@ -1237,13 +1278,15 @@ class CertHandler(object):
             self._verify_cert = verify_cert is True
             self._security_context = security_context
             self._osw = OpenSSLWrapper()
-            if key_file and os.path.isfile(key_file):
+            #if key_file and os.path.isfile(key_file):
+            if key_file :
                 self._key_str = self._osw.read_str_from_file(key_file, key_type)
             else:
                 self._key_str = ""
-            if cert_file and os.path.isfile(cert_file):
+            #if cert_file and os.path.isfile(cert_file):
+            if cert_file :
                 self._cert_str = self._osw.read_str_from_file(cert_file,
-                                                              cert_type)
+                                                          cert_type)
             else:
                 self._cert_str = ""
 
