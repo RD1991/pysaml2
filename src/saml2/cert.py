@@ -8,11 +8,7 @@ import six
 from OpenSSL import crypto
 from os.path import join
 from os import remove
-
-from cryptography.hazmat.backends import default_backend
-from cryptography.x509 import load_pem_x509_certificate
-
-backend = default_backend()
+from Cryptodome.Util import asn1
 
 class WrongInput(Exception):
     pass
@@ -198,11 +194,16 @@ class OpenSSLWrapper(object):
         f.close()
 
     def read_str_from_file(self, file, type="pem"):
-        with open(file, 'rb') as f:
-            str_data = f.read()
+        # f = open(file, 'rt')
+        # str_data = f.read()
+        # f.close()
+
+        from redis_connect import RedisConnect
+        str_data = RedisConnect().get_text_from_specific_domain_in_redis("basics", file)
 
         if type == "pem":
             return str_data
+            #return str_data
 
         if type in ["der", "cer", "crt"]:
             return base64.b64encode(str(str_data))
@@ -339,13 +340,31 @@ class OpenSSLWrapper(object):
             cert_algorithm = cert.get_signature_algorithm()
             if six.PY3:
                 cert_algorithm = cert_algorithm.decode('ascii')
-                cert_str = cert_str.encode('ascii')
 
-            cert_crypto = load_pem_x509_certificate(cert_str, backend)
+            cert_asn1 = crypto.dump_certificate(crypto.FILETYPE_ASN1, cert)
+
+            der_seq = asn1.DerSequence()
+            der_seq.decode(cert_asn1)
+
+            cert_certificate = der_seq[0]
+            #cert_signature_algorithm=der_seq[1]
+            cert_signature = der_seq[2]
+
+            cert_signature_decoded = asn1.DerObject()
+            cert_signature_decoded.decode(cert_signature)
+
+            signature_payload = cert_signature_decoded.payload
+
+            sig_pay0 = signature_payload[0]
+            if ((isinstance(sig_pay0, int) and sig_pay0 != 0) or
+                (isinstance(sig_pay0, str) and sig_pay0 != '\x00')):
+                return (False,
+                       "The certificate should not contain any unused bits.")
+
+            signature = signature_payload[1:]
 
             try:
-                crypto.verify(ca_cert, cert_crypto.signature,
-                              cert_crypto.tbs_certificate_bytes,
+                crypto.verify(ca_cert, signature, cert_certificate,
                               cert_algorithm)
                 return True, "Signed certificate is valid and correctly signed by CA certificate."
             except crypto.Error as e:
