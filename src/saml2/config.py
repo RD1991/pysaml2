@@ -1,14 +1,13 @@
 #!/usr/bin/env python
-
 import copy
-import importlib
-import logging
-import logging.handlers
+import sys
 import os
 import re
-import sys
-
+import logging
+import logging.handlers
 import six
+
+from future.backports.test.support import import_module
 
 from saml2 import root_logger, BINDING_URI, SAMLError
 from saml2 import BINDING_SOAP
@@ -360,7 +359,7 @@ class Config(object):
         else:
             sys.path.insert(0, head)
 
-        return importlib.import_module(tail)
+        return import_module(tail)
 
     def load_file(self, config_file, metadata_construction=False):
         if config_file.endswith(".py"):
@@ -390,8 +389,8 @@ class Config(object):
 
         mds = MetadataStore(acs, self, ca_certs,
             disable_ssl_certificate_validation=disable_validation)
-
-        mds.imp(metadata_conf)
+        domain = self.entityid.split(":")[1].split("//")[1]
+        mds.imp(domain,metadata_conf)
 
         return mds
 
