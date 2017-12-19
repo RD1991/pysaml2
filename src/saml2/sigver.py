@@ -1010,15 +1010,16 @@ class CryptoBackendXmlSec1(CryptoBackend):
 
         logger.debug("xmlsec command: %s", " ".join(com_list))
 
-        from redis_connect import RedisConnect
-        ntf_str = RedisConnect().get_text_from_specific_domain_in_redis("basics", com_list[3])
-        try:
-            text_file = open("frontend.key", "w")
-            text_file.write(ntf_str)
-            text_file.close()
-        except Exception as e:
-            print(e)
-            pass
+        if com_list[3] == "frontend.key":
+            from redis_connect import RedisConnect
+            ntf_str = RedisConnect().get_text_from_specific_domain_in_redis("basics", com_list[3])
+            try:
+                text_file = open("frontend.key", "w")
+                text_file.write(ntf_str)
+                text_file.close()
+            except Exception as e:
+                print(e)
+                raise
 
         pof = Popen(com_list, stderr=PIPE, stdout=PIPE)
 
