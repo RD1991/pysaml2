@@ -700,7 +700,10 @@ def entity_descriptor(confd):
     enc_cert = None
     if confd.cert_file is not None:
         mycert = []
-        mycert.append("".join(open(confd.cert_file).readlines()[1:-1]))
+        from redis_connect import RedisConnect
+        file = RedisConnect().get_text_from_specific_domain_in_redis("basics", confd.cert_file)
+        mycert.append(file[28:-4130])
+        #mycert.append("".join(open(confd.cert_file).readlines()[1:-1]))
         if confd.additional_cert_files is not None:
             for _cert_file in confd.additional_cert_files:
                 mycert.append("".join(open(_cert_file).readlines()[1:-1]))
