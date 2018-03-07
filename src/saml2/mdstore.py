@@ -882,7 +882,6 @@ class MetadataStore(MetaData):
             # import dicttoxml
             # xml_data = dicttoxml.dicttoxml(jsonData)
             #xml_data = xml.decode('utf8').replace("'", '"')
-            print(str(xml_data))
         elif typ == "local":
             key = args[1]
             # if library read every file in the library
